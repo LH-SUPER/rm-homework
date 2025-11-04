@@ -1,0 +1,33 @@
+  if(HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_RESET){
+	      HAL_GPIO_WritePin(GREEN_GPIO_Port, GREEN_Pin, GPIO_PIN_SET);
+	  } else{
+	      HAL_GPIO_WritePin(GREEN_GPIO_Port, GREEN_Pin, GPIO_PIN_RESET);
+	  }
+
+	  if (!HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin)) {
+
+	      HAL_Delay(50);
+	      
+	      if (!HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin)) {
+	          
+	          HAL_GPIO_TogglePin(BLUE_GPIO_Port, BLUE_Pin);
+	          
+	          while (!HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin))
+	          {
+	          }
+	      }
+	  }
+	
+	  if (!HAL_GPIO_ReadPin(KEY3_GPIO_Port, KEY3_Pin)) {
+	 
+	      HAL_Delay(50);
+	   
+	      if (!HAL_GPIO_ReadPin(KEY3_GPIO_Port, KEY3_Pin)) {
+	      
+	          HAL_GPIO_TogglePin(RED_GPIO_Port, RED_Pin);
+	         
+	          while (!HAL_GPIO_ReadPin(KEY3_GPIO_Port, KEY3_Pin))
+	          {
+	          }
+	      }
+	  }
