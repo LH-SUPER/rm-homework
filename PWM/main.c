@@ -1,3 +1,6 @@
+//其实没有实操，理论学完之后debugger的error为0就没管了（因为买的江协套件有外设缺失
+
+
 #include "main.h"
 
 TIM_HandleTypeDef htim3;  // PWM
