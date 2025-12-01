@@ -1,0 +1,673 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <math.h>
+#include "motor.h"
+#include "encoder.h"
+#include "sensor.h"
+#include "pid.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define WHEEL_DIAMETER 0.066f
+#define ENC_COUNTS_PER_REV 13200.0f
+#define CONTROL_FREQ_HZ 400.0f
+#define CONTROL_DT (1.0f/CONTROL_FREQ_HZ)
+#define TIM_PERIOD 1000 
+
+#define TURN_PWM_SLOW 150  
+#define TURN_PWM_FAST 250  
+#define TURN_TIME_MS 500  
+#define MAX_TURN_PWM_FAST 500
+#define MAX_TURN_PWM_SLOW 350
+
+#define NORMAL_SPEED 1.0f  
+#define LINE_JUMP_THRESHOLD 1.8f  
+#define BASE_TARGET_MIN 0.35f
+#define BASE_DEC_STEP 0.005f     
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim4;
+
+/* USER CODE BEGIN PV */
+
+float line_Kp = 0.35f;
+
+PID_t pid_left, pid_right;
+
+                                               float base_target = 1.1f;
+
+float max_speed = 2.0f;  
+
+
+int32_t last_left_cnt = 0, last_right_cnt = 0;
+float last_line_pos = 0;   
+int lost_cnt = 0;     
+float corner_slow_speed = 0.35f; 
+float corner_enter_threshold = 2.0f; 
+int   corner_state = 0;            
+int   corner_timer = 0;           
+
+float steer = 0.0f;     
+float left_target = 0.0f; 
+float right_target = 0.0f; 
+typedef enum {
+    STATE_FOLLOW_LINE = 0,
+    STATE_TURN_FIND_LINE
+} CarState_e;
+
+CarState_e car_state = STATE_FOLLOW_LINE;
+int turn_dir = 0; // -1 左转, 1 右转
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_TIM4_Init(void);
+/* USER CODE BEGIN PFP */
+static float counts_to_mps(float counts_per_sec);
+static float mps_to_counts_per_sec(float mps);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+static float counts_to_mps(float counts_per_sec){
+	// 1 rev -> ENC_COUNTS_PER_REV counts
+    // 1 rev -> circumference = pi*D meters
+    float revs_per_sec = counts_per_sec / ENC_COUNTS_PER_REV;
+    return revs_per_sec * 3.1415926f * WHEEL_DIAMETER;
+}
+static float mps_to_counts_per_sec(float mps){
+	   float revs_per_sec = mps / (3.1415926f * WHEEL_DIAMETER);
+	    return revs_per_sec * ENC_COUNTS_PER_REV;
+}
+void pid_reset(PID_t *pid){
+    pid->integr = 0;
+    pid->prev = 0;
+}
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM2_Init();
+  MX_TIM3_Init();
+  MX_TIM4_Init();
+  /* USER CODE BEGIN 2 */
+
+  motor_init();
+  encoder_init();
+  Sensor_Init();
+
+                                                                   if(base_target > 1.0f){
+	                                                                          pid_init(&pid_left, 1.2f, 0.0125f, 0.01f);  // 调高Kp，适当调整Ki和Kd
+	                                                                          pid_init(&pid_right, 1.2f, 0.0125f, 0.01f);
+                                                                      } else {
+	                                                                           pid_init(&pid_left, 0.8f, 0.02f, 0.01f);  // 小速度时调低Kp
+	                                                                           pid_init(&pid_right, 0.8f, 0.02f, 0.01f);
+                                                                       }
+
+  pid_left.out_min  = -mps_to_counts_per_sec(2.0f);
+  pid_left.out_max  =  mps_to_counts_per_sec(2.5f);
+  pid_right.out_min = -mps_to_counts_per_sec(2.0f);
+  pid_right.out_max =  mps_to_counts_per_sec(2.5f);
+  encoder_clear();
+  last_left_cnt = 0; last_right_cnt = 0;
+
+  uint32_t last_tick = HAL_GetTick();
+   float turn_pwm_slow = TURN_PWM_SLOW;
+   float turn_pwm_fast = TURN_PWM_FAST;
+   if (base_target > max_speed) {
+       base_target = max_speed;  
+   }
+
+
+     if (base_target > 1.0f) 
+         turn_pwm_slow = MAX_TURN_PWM_SLOW;
+         turn_pwm_fast = MAX_TURN_PWM_FAST;
+     } else {
+         
+         turn_pwm_slow = TURN_PWM_SLOW;
+         turn_pwm_fast = TURN_PWM_FAST;
+     }
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+	  uint32_t now = HAL_GetTick();
+	  if(now - last_tick >= (uint32_t)(1000/CONTROL_FREQ_HZ)){
+	  last_tick = now;
+
+	  float line_pos = Sensor_GetPosition(); // -3.5..+3.5, 100 means lost
+	  static float filtered_line_pos = 0.0f;
+	  filtered_line_pos = 0.9f * filtered_line_pos + 0.1f * line_pos; 
+	  if(line_pos != 100.0f){
+	      float jump = fabs(filtered_line_pos - last_line_pos);
+	      if(jump > LINE_JUMP_THRESHOLD){
+	          base_target -= BASE_DEC_STEP;
+	          if(base_target < BASE_TARGET_MIN) base_target = BASE_TARGET_MIN;
+	      }
+	  }
+	提前制动
+	  弯道减速
+	--------------------------------------
+	  if(line_pos != 100.0f){   // 只有看到线才参与判断
+	      float abs_pos = fabs(line_pos);
+
+	      switch(corner_state){
+
+	           0：正常行驶 
+	          case 0:
+	              if(abs_pos > corner_enter_threshold){
+	      
+	                  corner_state = 1;
+	                  corner_timer = 0;
+	              }
+	              break;
+	          case 1:
+	              base_target = corner_slow_speed; 
+
+	              corner_timer++;
+	              if(abs_pos < 1.0f){
+	                  corner_state = 2;
+	                  corner_timer = 0;
+	              }
+	              break;
+
+	          //平滑恢复
+	          case 2:
+	              base_target += 0.005f;  
+	              if(base_target >= 0.8f){
+	                  base_target = 0.8f;
+	                  corner_state = 0;
+	              }
+	              break;
+	      }
+	  }
+
+	  //  直角判断逻辑 
+      // 状态机
+      switch(car_state){
+          case STATE_FOLLOW_LINE:
+              if(line_pos == 100.0f){
+                  lost_cnt++;
+                  if(lost_cnt > 3){
+                      car_state = STATE_TURN_FIND_LINE;
+                      turn_dir = (last_line_pos < 0) ? -1 : 1; // 左转/右转
+                      lost_cnt = 0;
+                      pid_reset(&pid_left);
+                      pid_reset(&pid_right);
+                  }
+              } else {
+                  // 正常循迹
+                  lost_cnt = 0;
+                  last_line_pos = line_pos;
+
+                  steer = line_Kp * line_pos;
+                  float max_steer = 0.3f;
+                  if(steer > max_steer) steer = max_steer;
+                  if(steer < -max_steer) steer = -max_steer;
+
+                  left_target = base_target - steer;
+                  right_target = base_target + steer;
+                  // 平滑修正值
+                          static float smoothed_steer = 0.0f;  // 存储平滑后的修正值
+                          smoothed_steer = 0.7f * smoothed_steer + 0.3f * steer;  // 平滑系数 
+                          left_target = base_target - smoothed_steer;
+                          right_target = base_target + smoothed_steer;
+
+                  if(left_target < 0.0f) left_target = 0.0f;
+                  if(right_target < 0.0f) right_target = 0.0f;
+              }
+              break;
+
+          case STATE_TURN_FIND_LINE:
+              // 原地旋转寻找线
+              if(turn_dir == -1){ // 左转
+                  motor_set_dir(MOTOR_LEFT, 1);  
+                  motor_set_dir(MOTOR_RIGHT, 0); 
+              } else { // 右转
+                  motor_set_dir(MOTOR_LEFT, 0);  
+                  motor_set_dir(MOTOR_RIGHT, 1); 
+              }
+
+              // 动态 PWM，根据 base_target 调整
+              uint16_t pwm_turn = TURN_PWM_FAST;
+              if(base_target > 0.5f) pwm_turn = MAX_TURN_PWM_FAST;
+              motor_set_pwm(MOTOR_LEFT, pwm_turn);
+              motor_set_pwm(MOTOR_RIGHT, pwm_turn);
+
+              // 检测线
+              if(line_pos != 100.0f){
+                  car_state = STATE_FOLLOW_LINE;
+                  last_line_pos = line_pos;
+                  pid_reset(&pid_left);
+                  pid_reset(&pid_right);
+              }
+              break;
+      }
+	  // 读取编码器计数，估计当前速度
+	  int32_t left_cnt = encoder_get_left();
+	  int32_t right_cnt = encoder_get_right();
+	  // 简单差分估计
+	  float left_dcnt = (float)(left_cnt - last_left_cnt);
+	  float right_dcnt = (float)(right_cnt - last_right_cnt);
+	  last_left_cnt = left_cnt; last_right_cnt = right_cnt;
+	  // counts per control period -> counts per sec
+	  float left_cps = left_dcnt * CONTROL_FREQ_HZ;
+	  float right_cps = right_dcnt * CONTROL_FREQ_HZ;
+	  // 转为 m/s
+	  float left_mps = counts_to_mps(left_cps);
+	  float right_mps = counts_to_mps(right_cps);
+
+	  //  速度环 PID 
+	  float left_target_cps = mps_to_counts_per_sec(left_target);
+	  float right_target_cps = mps_to_counts_per_sec(right_target);
+
+	  float left_out = pid_update(&pid_left, left_target_cps, left_cps, CONTROL_DT);
+	  float right_out = pid_update(&pid_right, right_target_cps, right_cps, CONTROL_DT);
+	  // --- 安全版: 根据符号设置方向并取绝对值，同时限幅 ---
+	  float max_cps_possible = mps_to_counts_per_sec(2.0f); // 假定 2m/s 对应最大 PWM
+	  uint16_t pwm_left, pwm_right;
+
+	  // 左轮
+	  if(left_out >= 0){
+	      motor_set_dir(MOTOR_LEFT, 0); // 正转
+	      pwm_left = (uint16_t)( (left_out / max_cps_possible) * TIM_PERIOD );
+	  } else {
+	      motor_set_dir(MOTOR_LEFT, 1); // 反转
+	      pwm_left = (uint16_t)( (-left_out / max_cps_possible) * TIM_PERIOD );
+	  }
+
+	  // 右轮
+	  if(right_out >= 0){
+	      motor_set_dir(MOTOR_RIGHT, 0); // 正转
+	      pwm_right = (uint16_t)( (right_out / max_cps_possible) * TIM_PERIOD );
+	  } else {
+	      motor_set_dir(MOTOR_RIGHT, 1); // 反转
+	      pwm_right = (uint16_t)( (-right_out / max_cps_possible) * TIM_PERIOD );
+	  }
+	  if(pwm_left > TIM_PERIOD) pwm_left = TIM_PERIOD;
+	  if(pwm_right > TIM_PERIOD) pwm_right = TIM_PERIOD;
+
+	  //  方向判断：简单用目标速度决定方向
+	  motor_set_dir(MOTOR_LEFT, 0);
+	  motor_set_dir(MOTOR_RIGHT, 0);
+
+	  // 输出 PWM
+	  motor_set_pwm(MOTOR_LEFT, pwm_left);
+	  motor_set_pwm(MOTOR_RIGHT, pwm_right);
+
+	  }
+
+
+
+
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 71;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 999;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+  HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_Encoder_InitTypeDef sConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 65535;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 12;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 0;
+  if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
+}
+
+/**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+
+  /* USER CODE BEGIN TIM4_Init 0 */
+
+  /* USER CODE END TIM4_Init 0 */
+
+  TIM_Encoder_InitTypeDef sConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM4_Init 1 */
+
+  /* USER CODE END TIM4_Init 1 */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 0;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 12;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 0;
+  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM4_Init 2 */
+
+  /* USER CODE END TIM4_Init 2 */
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : PA2 PA3 PA4 PA5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB0 PB1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB13 PB3 PB4 PB5
+                           PB8 PB9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5
+                          |GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA10 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
