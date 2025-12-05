@@ -108,8 +108,6 @@ static float mps_to_counts_per_sec(float mps);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 static float counts_to_mps(float counts_per_sec){
-	// 1 rev -> ENC_COUNTS_PER_REV counts
-    // 1 rev -> circumference = pi*D meters
     float revs_per_sec = counts_per_sec / ENC_COUNTS_PER_REV;
     return revs_per_sec * 3.1415926f * WHEEL_DIAMETER;
 }
