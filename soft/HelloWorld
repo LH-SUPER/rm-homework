@@ -1,0 +1,21 @@
+#include<stdio.h>
+int main()
+{int expression;
+    do{
+    printf("输入数字0，1，-1:");
+    scanf("%d",&expression);
+    switch (expression)
+    {
+    case 1:
+        printf("HELLOWORLD\n"); 
+        break;
+    case 0:
+        printf("helloworld\n");
+        break;
+    case -1:
+        printf("out now\n");
+        break;
+    }
+    }while(expression!=-1);
+    return 0;
+}
