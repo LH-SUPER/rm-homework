@@ -1,28 +1,16 @@
+RMElectCtrl
 ├── week1
 │   ├── code
-│   │   ├── 1_签到       #签到
-│   │   └── 2_HelloWorld #helloworld
-│   └── video            #视频
-|
+│   │   ├── 1    # 签到题
+│   │   ├── 2    # HelloWorld
+│   │   ├── 3    # GPIO缺省配置
+│   └── ├── 4    # 软件模拟i2c
 ├── week2
 │   ├── code
-│   │   ├── 1_GPIO    #GPIO
-│   │   └── 2_IIC     #I2C
-│   └── video         #视频
-│        
-├── week3
-│   ├── code
-│   │   └── 点亮小灯  #小灯
-│   └── video         #视频
-│   
-└── week4
-├── interrupt   
-├── TIM,PWM
-└── video    
-
-week5
-IIC,PID
-
-
-week6
-循迹小车
+│   │   ├── 1    # 小灯
+│   │   ├── 2    # 外部中断和定时器
+│   │   ├── 3    # pwm电机控制和速度读取
+│   └── ├── 4    # PID算法
+├──  test （考核） ├── 循迹小车
+│ 
+└── README.md
