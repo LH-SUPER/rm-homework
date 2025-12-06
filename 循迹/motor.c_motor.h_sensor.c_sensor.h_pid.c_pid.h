@@ -1,11 +1,6 @@
 Sensor.c:
 #include "sensor.h"
 
-void Sensor_Init(void)
-{
-
-}
-
 void Sensor_Read(uint8_t *buf)
 {
 buf[0] = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
@@ -66,7 +61,6 @@ float Sensor_GetPosition(void);
 #endif
 
 Motor.c:
-// Core/Src/motor.c
 #include "motor.h"
 #include "main.h"
 
@@ -113,7 +107,6 @@ HAL_GPIO_WritePin(BIN2_PORT, BIN2_PIN, dir?GPIO_PIN_RESET:GPIO_PIN_SET);
 }
 
 Motor.h:
-// Core/Inc/motor.h
 #ifndef MOTOR_H
 #define MOTOR_H
 #include "stm32f1xx_hal.h"
@@ -124,7 +117,6 @@ void motor_set_dir(Motor_t m, uint8_t dir);
 #endif
 
 Pid.c:
-// Core/Src/pid.c
 #include "pid.h"
 #include <math.h>
 void pid_init(PID_t *p, float Kp, float Ki, float Kd){
@@ -143,7 +135,6 @@ return out;
 }
 
 Pid.h:
-// Core/Inc/pid.h
 #ifndef PID_H
 #define PID_H
 typedef struct { float Kp, Ki, Kd; float integr, prev; float out_min, out_max; } PID_t;
@@ -152,7 +143,6 @@ float pid_update(PID_t *p, float target, float measure, float dt);
 #endif
 
 Encoder.c:
-// Core/Src/encoder.c
 #include "encoder.h"
 #include "main.h"
 
@@ -177,7 +167,6 @@ __HAL_TIM_SET_COUNTER(&htim4, 0);
 }
 
 Encoder.h:
-// Core/Inc/encoder.h
 #ifndef ENCODER_H
 #define ENCODER_H
 #include "stm32f1xx_hal.h"
