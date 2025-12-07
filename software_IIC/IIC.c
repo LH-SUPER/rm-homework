@@ -1,73 +1,82 @@
 #include "SoftIIC.h"
-// delay一下
-static void IIC_Delay(void)
+// 延时一下
+static void SoftIIC_Delay(void)
 {
-for(volatile int i = 0; i < 200; i++);
+    for (volatile int cnt = 0; cnt < 200; cnt++);
 }
 
-#define SDA_HIGH() HAL_GPIO_WritePin(SDA_GPIO_Port, SDA_Pin, GPIO_PIN_SET)
-#define SDA_LOW() HAL_GPIO_WritePin(SDA_GPIO_Port, SDA_Pin, GPIO_PIN_RESET)
-#define SCL_HIGH() HAL_GPIO_WritePin(SCL_GPIO_Port, SCL_Pin, GPIO_PIN_SET)
-#define SCL_LOW() HAL_GPIO_WritePin(SCL_GPIO_Port, SCL_Pin, GPIO_PIN_RESET)
-#define SDA_READ() HAL_GPIO_ReadPin(SDA_GPIO_Port, SDA_Pin)
+#define IIC_SDA_HIGH() HAL_GPIO_WritePin(SDA_GPIO_Port, SDA_Pin, GPIO_PIN_SET)
+#define IIC_SDA_LOW()  HAL_GPIO_WritePin(SDA_GPIO_Port, SDA_Pin, GPIO_PIN_RESET)
+#define IIC_SCL_HIGH() HAL_GPIO_WritePin(SCL_GPIO_Port, SCL_Pin, GPIO_PIN_SET)
+#define IIC_SCL_LOW()  HAL_GPIO_WritePin(SCL_GPIO_Port, SCL_Pin, GPIO_PIN_RESET)
+#define IIC_SDA_READ() HAL_GPIO_ReadPin(SDA_GPIO_Port, SDA_Pin)
 
-void IIC_Start(void)
+void SoftIIC_Start(void)
 {
-SDA_HIGH();
-SCL_HIGH();
-IIC_Delay();
-SDA_LOW(); 
-IIC_Delay();
-SCL_LOW();
-IIC_Delay();
+    IIC_SDA_HIGH();
+    IIC_SCL_HIGH();
+    SoftIIC_Delay();
+
+    IIC_SDA_LOW(); 
+    SoftIIC_Delay();
+
+    IIC_SCL_LOW();
+    SoftIIC_Delay();
 }
 
-void IIC_Stop(void)
+void SoftIIC_Stop(void)
 {
-SDA_LOW();
-IIC_Delay();
-SCL_HIGH();
-IIC_Delay();
-SDA_HIGH();
-IIC_Delay();
+    IIC_SDA_LOW();
+    SoftIIC_Delay();
+
+    IIC_SCL_HIGH();
+    SoftIIC_Delay();
+
+    IIC_SDA_HIGH();
+    SoftIIC_Delay();
 }
 
-void IIC_SendByte(uint8_t data)
+void SoftIIC_SendByte(uint8_t byte)
 {
-for(int i=0; i<8; i++)
-{
-if(data & 0x80)
-SDA_HIGH();
-else
-SDA_LOW();
-IIC_Delay();
-SCL_HIGH();
+    for (int bit = 0; bit < 8; bit++)
+    {
+        if (byte & 0x80) 
+            IIC_SDA_HIGH();
+        else
+            IIC_SDA_LOW();
 
-IIC_Delay();
-SCL_LOW();
-IIC_Delay();
-data <<= 1;
-}
-}
-// ACK判断
-uint8_t IIC_ReadAck(void)
-{
-uint8_t ack;
-SDA_HIGH(); // 释放 SDA 让从机拉低
-IIC_Delay();
-ack = SDA_READ(); // 看 SDA 是不是低电平
-IIC_Delay();
-SCL_HIGH();
+        SoftIIC_Delay();
+        IIC_SCL_HIGH();
+        SoftIIC_Delay();
+        IIC_SCL_LOW();
+        SoftIIC_Delay();
 
-SCL_LOW();
-IIC_Delay();
-return ack;
+        byte <<= 1;
+    }
 }
 
-void IIC_SendData(uint8_t dat)
+uint8_t SoftIIC_WaitAck(void)
 {
-IIC_Start();
-IIC_SendByte(dat);
-IIC_ReadAck();
-IIC_Stop();
+    uint8_t ack;
+
+    IIC_SDA_HIGH();  
+    SoftIIC_Delay();
+
+    ack = IIC_SDA_READ(); 
+    SoftIIC_Delay();
+
+    IIC_SCL_HIGH();
+    SoftIIC_Delay();
+    IIC_SCL_LOW();
+    SoftIIC_Delay();
+
+    return ack; 
+}
+
+void SoftIIC_SendData(uint8_t data)
+{
+    SoftIIC_Start();
+    SoftIIC_SendByte(data);
+    SoftIIC_WaitAck();
+    SoftIIC_Stop();
 }
