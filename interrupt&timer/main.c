@@ -13,6 +13,14 @@ void Delay_us(uint16_t us){
         __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
     }
 }
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == KEY2_Pin)
+    {
+        HAL_GPIO_TogglePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin);
+    }
+}
+
 
 HAL_TIM_Base_Start_IT(&htim2);
 
